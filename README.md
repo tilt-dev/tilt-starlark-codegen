@@ -1,5 +1,7 @@
 # tilt-starlark-codegen
 
+[![Build Status](https://circleci.com/gh/tilt-dev/tilt-starlark-codegen/tree/main.svg?style=shield)](https://circleci.com/gh/tilt-dev/tilt-starlark-codegen)
+
 Generates starlark functions based on Kubernetes-style API models
 
 This repo is intended for:
@@ -18,4 +20,7 @@ tilt-starlark-codegen ./path/to/input ./path/to/output
 
 # In the Tilt codebase
 tilt-starlark-codegen ./pkg/apis/core/v1alpha1 ./internal/tiltfile/v1alpha1
+
+# Dry run (print to stdout)
+tilt-starlark-codegen ./pkg/apis/core/v1alpha1 -
 ```
