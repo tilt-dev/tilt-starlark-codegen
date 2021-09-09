@@ -54,6 +54,10 @@ tilt-starlark-codegen ./pkg/apis/core/v1alpha1 -
 
 	// gofmt
 	result, err := imports.Process("", buf.Bytes(), nil)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v", err)
+		os.Exit(1)
+	}
 
 	out, err := codegen.OpenOutputFile(args[2])
 	if err != nil {
