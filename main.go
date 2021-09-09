@@ -33,21 +33,21 @@ tilt-starlark-codegen ./pkg/apis/core/v1alpha1 -
 
 	pkg, types, err := codegen.LoadStarlarkGenTypes(args[1])
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v", err)
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 
 	buf := bytes.NewBuffer(nil)
 	err = codegen.WritePreamble(pkg, buf)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v", err)
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 
 	for _, t := range types {
 		err := codegen.WriteStarlarkFunction(t, pkg, buf)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v", err)
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
 	}
@@ -55,19 +55,21 @@ tilt-starlark-codegen ./pkg/apis/core/v1alpha1 -
 	// gofmt
 	result, err := imports.Process("", buf.Bytes(), nil)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v", err)
+
+		fmt.Fprintf(os.Stderr, "Error formatting output: %v\n", err)
+		fmt.Fprintf(os.Stderr, "%s\n", buf.String())
 		os.Exit(1)
 	}
 
 	out, err := codegen.OpenOutputFile(args[2])
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v", err)
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 
 	_, err = out.Write(result)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v", err)
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 
