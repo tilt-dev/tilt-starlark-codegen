@@ -1,9 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+
+	"golang.org/x/tools/imports"
 
 	"github.com/tilt-dev/tilt-starlark-codegen/internal/codegen"
 )
@@ -33,23 +37,38 @@ tilt-starlark-codegen ./pkg/apis/core/v1alpha1 -
 		os.Exit(1)
 	}
 
-	out, err := codegen.OpenOutputFile(args[2])
+	buf := bytes.NewBuffer(nil)
+	err = codegen.WritePreamble(pkg, buf)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v", err)
 		os.Exit(1)
 	}
 
 	for _, t := range types {
-		err := codegen.WriteStarlarkFunction(t, pkg, out)
+		err := codegen.WriteStarlarkFunction(t, pkg, buf)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v", err)
 			os.Exit(1)
 		}
 	}
 
-	err = codegen.CloseOutputFile(out)
+	// gofmt
+	result, err := imports.Process("", buf.Bytes(), nil)
+
+	out, err := codegen.OpenOutputFile(args[2])
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v", err)
 		os.Exit(1)
+	}
+
+	_, err = out.Write(result)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v", err)
+		os.Exit(1)
+	}
+
+	closer, ok := out.(io.Closer)
+	if ok {
+		_ = closer.Close()
 	}
 }
