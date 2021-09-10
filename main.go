@@ -44,6 +44,12 @@ tilt-starlark-codegen ./pkg/apis/core/v1alpha1 -
 		os.Exit(1)
 	}
 
+	err = codegen.WriteStarlarkRegistrationFunc(types, pkg, buf)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+
 	for _, t := range types {
 		err := codegen.WriteStarlarkFunction(t, pkg, buf)
 		if err != nil {
