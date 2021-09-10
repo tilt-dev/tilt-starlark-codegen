@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/iancoleman/strcase"
 	"k8s.io/gengo/parser"
@@ -134,19 +135,41 @@ func unpackMemberVarName(m types.Member) string {
 //
 // A ("", obj.Spec.Name) if this does not need a special unpack var.
 // A (Type, Name) pair if this does need a special unpack var.
-// error if we don't know how to unpack this field.
 func unpackMemberVar(m types.Member) (string, string, error) {
 	t := m.Type
 	if t.Kind == types.Builtin {
 		return "", fmt.Sprintf("obj.Spec.%s", m.Name), nil
 	}
 
+	if t.Kind == types.Struct {
+		return t.Name.Name, unpackMemberVarName(m), nil
+	}
+
+	if t.Kind == types.Pointer {
+		if t.Elem.Kind == types.Struct {
+			return t.Elem.Name.Name, unpackMemberVarName(m), nil
+		}
+	}
+
 	if t.Kind == types.Slice {
 		if t.Elem.Kind == types.Builtin && t.Elem.Name.Name == "string" {
 			return "value.StringList", unpackMemberVarName(m), nil
 		}
+
+		if t.Elem.Kind == types.Struct {
+			return fmt.Sprintf("%sList", t.Elem.Name.Name), unpackMemberVarName(m), nil
+		}
 	}
 	return "", "", fmt.Errorf("Cannot unpack member %s", m.Name)
+}
+
+func modelTypeName(t *types.Type) string {
+	if strings.Contains(t.Name.Package, "/meta") {
+		return fmt.Sprintf("metav1.%s", t.Name.Name)
+	}
+
+	parts := strings.Split(t.Name.Package, "/")
+	return fmt.Sprintf("%s.%s", parts[len(parts)-1], t.Name.Name)
 }
 
 // Given a gengo Type, create a starlark function that reads that type.
@@ -158,7 +181,7 @@ func WriteStarlarkFunction(t *types.Type, pkg *types.Package, w io.Writer) error
 		return fmt.Errorf("type has no spec: %s", tName)
 	}
 
-	objTypeName := fmt.Sprintf("%s.%s", pkg.Name, tName)
+	objTypeName := modelTypeName(t)
 
 	// Print the function signature.
 	_, err := fmt.Fprintf(w, `
@@ -235,6 +258,16 @@ func (p Plugin) %s(t *starlark.Thread, fn *starlark.Builtin, args starlark.Tuple
 		if varT == "" {
 			continue
 		}
+		if member.Type.Kind == types.Pointer {
+			varN = "&" + varN
+			if member.Type.Elem.Kind == types.Struct {
+				varN = fmt.Sprintf("(*%s)(%s)", modelTypeName(member.Type.Elem), varN)
+			}
+		}
+
+		if member.Type.Kind == types.Struct {
+			varN = fmt.Sprintf("%s(%s)", modelTypeName(member.Type), varN)
+		}
 		_, err = fmt.Fprintf(w, `
     obj.Spec.%s = %s`, member.Name, varN)
 		if err != nil {
@@ -249,6 +282,256 @@ func (p Plugin) %s(t *starlark.Thread, fn *starlark.Builtin, args starlark.Tuple
 	return p.register(t, obj)
 }
 `)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+// Given a member Type, create a starlark function that reads a list of that type.
+func WriteStarlarkListUnpacker(t *types.Type, pkg *types.Package, w io.Writer) error {
+
+	tName := t.Name.Name
+
+	// Print the Unpack() signature.
+	_, err := fmt.Fprintf(w, `
+type %sList []%s
+
+func (o *%sList) Unpack(v starlark.Value) error {
+	*o = %sList{}
+
+  listObj, ok := v.(*starlark.List)
+  if !ok {
+    return fmt.Errorf("expected list, actual: %%v", v.Type())
+  }
+
+  for i := 0; i < listObj.Len(); i++ {
+    v := listObj.Index(i)
+
+    var item %s
+    err := item.Unpack(v)
+    if err != nil {
+      return fmt.Errorf("at index %%d: %%v", i, err)
+    }
+    *o = append(*o, %s(item))
+  }
+  return nil
+}`, tName, modelTypeName(t), tName, tName, tName, modelTypeName(t))
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+// Given a member Type, create a starlark function that reads that type.
+func WriteStarlarkUnpacker(t *types.Type, pkg *types.Package, w io.Writer) error {
+
+	tName := t.Name.Name
+
+	// Print the Unpack() signature.
+	_, err := fmt.Fprintf(w, `
+type %s %s
+
+func (o *%s) Unpack(v starlark.Value) error {`,
+		tName, modelTypeName(t), tName)
+	if err != nil {
+		return err
+	}
+
+	// Zero out the object, and start iterating over the value.
+	_, err = fmt.Fprintf(w, `
+	*o = %s{}
+
+  mapObj, ok := v.(*starlark.Dict)
+  if !ok {
+    return fmt.Errorf("expected dict, actual: %%v", v.Type())
+  }
+
+  for _, attrName := range mapObj.AttrNames() {
+    attr, _ := mapObj.Attr(attrName)
+`, tName)
+	if err != nil {
+		return err
+	}
+
+	// Unpack each attribute.
+	for _, m := range t.Members {
+		err := writeAttrUnpacker(m, pkg, w)
+		if err != nil {
+			return fmt.Errorf("generating %s unpacker: %v", t.Name.Name, err)
+		}
+	}
+
+	_, err = fmt.Fprintf(w, `
+    return fmt.Errorf("Unexpected attribute name: %%s", attrName)
+  }
+  return nil
+}`)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func isTimeMember(m types.Member) bool {
+	if m.Type.Kind == types.Pointer && m.Type.Elem.Kind == types.Struct {
+		elName := m.Type.Elem.Name.Name
+		if elName == "Time" || elName == "MicroTime" {
+			return true
+		}
+	}
+	if m.Type.Kind == types.Struct {
+		tName := m.Type.Name.Name
+		if tName == "Time" || tName == "MicroTime" {
+			return true
+		}
+	}
+	return false
+}
+
+// Recursive helper function for unpacking individual members
+// of a struct.
+func writeAttrUnpacker(m types.Member, pkg *types.Package, w io.Writer) error {
+	if m.Embedded {
+		for _, embeddedMember := range m.Type.Members {
+			err := writeAttrUnpacker(embeddedMember, pkg, w)
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	// Skip Time and MicroTime for now.
+	if isTimeMember(m) {
+		return nil
+	}
+
+	_, err := fmt.Fprintf(w, `
+    if attrName == "%s" {`, strcase.ToSnake(m.Name))
+	if err != nil {
+		return err
+	}
+
+	if m.Type.Kind == types.Builtin ||
+		(m.Type.Kind == types.Alias && m.Type.Underlying.Kind == types.Builtin) ||
+		(m.Type.Kind == types.Pointer && m.Type.Elem.Kind == types.Builtin) {
+		cast := fmt.Sprintf("%s(v)", m.Type.Name.Name)
+		isInt := m.Type.Name.Name == "int32"
+		isBool := m.Type.Name.Name == "bool"
+		if m.Type.Kind == types.Alias {
+			cast = fmt.Sprintf("%s(v)", modelTypeName(m.Type))
+			isInt = m.Type.Underlying.Name.Name == "int32"
+		} else if m.Type.Kind == types.Pointer {
+			cast = fmt.Sprintf("(*%s)(&v)", m.Type.Elem.Name.Name)
+			isInt = m.Type.Elem.Name.Name == "int32"
+		}
+
+		if isBool {
+			// Unpack bools
+			_, err = fmt.Fprintf(w, `
+      v, ok := attr.(starlark.Bool)
+      if !ok {
+        return fmt.Errorf("Expected bool, got: %%v", attr.Type())
+      }
+      o.%s = bool(v)
+      continue`, m.Name)
+			if err != nil {
+				return err
+			}
+		} else if isInt {
+			// Unpack ints
+			_, err = fmt.Fprintf(w, `
+      v, err := starlark.AsInt32(attr)
+      if err != nil {
+        return fmt.Errorf("Expected int, got: %%v", err)
+      }
+      o.%s = %s
+      continue`, m.Name, cast)
+			if err != nil {
+				return err
+			}
+		} else {
+			// Unpack strings
+			_, err = fmt.Fprintf(w, `
+      v, ok := starlark.AsString(attr)
+      if !ok {
+        return fmt.Errorf("Expected string, actual: %%s", attr.Type())
+      }
+      o.%s = %s
+      continue`, m.Name, cast)
+			if err != nil {
+				return err
+			}
+		}
+	} else if m.Type.Kind == types.Slice &&
+		m.Type.Elem.Kind == types.Builtin && m.Type.Elem.Name.Name == "string" {
+		_, err = fmt.Fprintf(w, `
+      var v value.StringList
+      err := v.Unpack(attr)
+      if err != nil {
+        return fmt.Errorf("unpacking %%s: %%v", attrName, err)
+      }
+      o.%s = v
+      continue`, m.Name)
+		if err != nil {
+			return err
+		}
+	} else if m.Type.Kind == types.Slice &&
+		m.Type.Elem.Kind == types.Struct {
+		_, err = fmt.Fprintf(w, `
+      var v %sList
+      err := v.Unpack(attr)
+      if err != nil {
+        return fmt.Errorf("unpacking %%s: %%v", attrName, err)
+      }
+      o.%s = v
+      continue`, m.Type.Elem.Name.Name, m.Name)
+		if err != nil {
+			return err
+		}
+	} else if m.Type.Kind == types.Struct {
+		_, err = fmt.Fprintf(w, `
+      var v %s
+      err := v.Unpack(attr)
+      if err != nil {
+        return fmt.Errorf("unpacking %%s: %%v", attrName, err)
+      }
+      o.%s = v
+      continue`, m.Type.Name.Name, m.Name)
+		if err != nil {
+			return err
+		}
+	} else if m.Type.Kind == types.Pointer && m.Type.Elem.Kind == types.Struct {
+		_, err = fmt.Fprintf(w, `
+      var v %s
+      err := v.Unpack(attr)
+      if err != nil {
+        return fmt.Errorf("unpacking %%s: %%v", attrName, err)
+      }
+      o.%s = (*%s)(&v)
+      continue`, m.Type.Elem.Name.Name, m.Name, modelTypeName(m.Type.Elem))
+		if err != nil {
+			return err
+		}
+	} else if m.Type.Kind == types.Map && m.Type.Elem.Name.Name == "string" && m.Type.Key.Name.Name == "string" {
+		_, err = fmt.Fprintf(w, `
+      var v value.StringStringMap
+      err := v.Unpack(attr)
+      if err != nil {
+        return fmt.Errorf("unpacking %%s: %%v", attrName, err)
+      }
+      o.%s = (map[string]string)(v)
+      continue`, m.Name)
+		if err != nil {
+			return err
+		}
+	} else {
+		return fmt.Errorf("Unable to unpack attribute %s type %s", m.Name, m.Type)
+	}
+
+	_, err = fmt.Fprintf(w, `
+    }`)
 	if err != nil {
 		return err
 	}

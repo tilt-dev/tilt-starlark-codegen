@@ -9,6 +9,7 @@ import (
 
 	"golang.org/x/tools/imports"
 
+	"github.com/iancoleman/strcase"
 	"github.com/tilt-dev/tilt-starlark-codegen/internal/codegen"
 )
 
@@ -37,6 +38,9 @@ tilt-starlark-codegen ./pkg/apis/core/v1alpha1 -
 		os.Exit(1)
 	}
 
+	strcase.ConfigureAcronym("UIButtons", "uiButtons")
+	strcase.ConfigureAcronym("UIButton", "uiButton")
+
 	buf := bytes.NewBuffer(nil)
 	err = codegen.WritePreamble(pkg, buf)
 	if err != nil {
@@ -58,13 +62,37 @@ tilt-starlark-codegen ./pkg/apis/core/v1alpha1 -
 		}
 	}
 
+	memberTypes, err := codegen.FindStructMembers(types)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	for _, t := range memberTypes {
+		err = codegen.WriteStarlarkUnpacker(t, pkg, buf)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+
+		err = codegen.WriteStarlarkListUnpacker(t, pkg, buf)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+	}
+
 	// gofmt
 	result, err := imports.Process("", buf.Bytes(), nil)
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "Problem formatting output: %v\n", err)
 
-		fmt.Fprintf(os.Stderr, "Error formatting output: %v\n", err)
-		fmt.Fprintf(os.Stderr, "%s\n", buf.String())
-		os.Exit(1)
+		// If we have a formatting error, we should still treat
+		// this as success and write to the file anyway.
+		// The user will see an error downstream when they
+		// try to compile the code, and giving them the code
+		// makes it easier to see what went wrong.
+		result = buf.Bytes()
 	}
 
 	out, err := codegen.OpenOutputFile(args[2])
