@@ -89,6 +89,34 @@ import (
 	return nil
 }
 
+// Writes a function that registers all the starlark methods.
+func WriteStarlarkRegistrationFunc(types []*types.Type, pkg *types.Package, w io.Writer) error {
+	_, err := fmt.Fprintf(w, `
+func (p Plugin) registerSymbols(env *starkit.Environment) error {
+  var err error
+`)
+	if err != nil {
+		return err
+	}
+
+	for _, t := range types {
+		tName := t.Name.Name
+		_, err := fmt.Fprintf(w, `
+	err = env.AddBuiltin("%s.%s", p.%s)
+	if err != nil {
+		return err
+	}`, pkg.Name, strcase.ToSnake(tName), strcase.ToLowerCamel(tName))
+		if err != nil {
+			return err
+		}
+	}
+
+	_, err = fmt.Fprintf(w, `
+  return nil
+}`)
+	return err
+}
+
 func unpackMemberVarName(m types.Member) string {
 	if m.Name == "Args" {
 		return "specArgs"
@@ -216,6 +244,8 @@ func (p Plugin) %s(t *starlark.Thread, fn *starlark.Builtin, args starlark.Tuple
 
 	// Register the type.
 	_, err = fmt.Fprintf(w, `
+  obj.ObjectMeta.Labels = labels
+  obj.ObjectMeta.Annotations = annotations
 	return p.register(t, obj)
 }
 `)
