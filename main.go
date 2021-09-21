@@ -55,8 +55,7 @@ tilt-starlark-codegen ./pkg/apis/core/v1alpha1 -
 		os.Exit(1)
 	}
 
-	//registerTypes := append(append([]*types.Type{}, topTypes...), memberTypes...)
-	registerTypes := append([]*types.Type{}, topTypes...)
+	registerTypes := append(append([]*types.Type{}, topTypes...), memberTypes...)
 	err = codegen.WriteStarlarkRegistrationFunc(registerTypes, pkg, buf)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -78,7 +77,7 @@ tilt-starlark-codegen ./pkg/apis/core/v1alpha1 -
 			os.Exit(1)
 		}
 
-		err = codegen.WriteStarlarkListUnpacker(t, pkg, buf)
+		err = codegen.WriteStarlarkStructListFunction(t, pkg, buf)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
