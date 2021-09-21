@@ -162,7 +162,7 @@ func unpackMemberVar(m types.Member) (memberVar, error) {
 			return memberVar{
 				Type:    t.Elem.Name.Name,
 				Name:    unpackMemberVarName(m),
-				Initial: fmt.Sprintf("= &%s{t: t}", t.Elem.Name.Name),
+				Initial: fmt.Sprintf("= %s{t: t}", t.Elem.Name.Name),
 			}, nil
 		}
 	}
@@ -286,6 +286,7 @@ func (p Plugin) %s(t *starlark.Thread, fn *starlark.Builtin, args starlark.Tuple
 	// Copy unpackers into the object.
 	for _, member := range spec.Members {
 		memberVar, _ := unpackMemberVar(member)
+		unpackOptional := false
 		if memberVar.Type == "" {
 			continue
 		}
@@ -297,16 +298,34 @@ func (p Plugin) %s(t *starlark.Thread, fn *starlark.Builtin, args starlark.Tuple
 			varN = "&" + varN
 			if member.Type.Elem.Kind == types.Struct {
 				varN = fmt.Sprintf("(*%s)(%s)", modelTypeName(member.Type.Elem), varN)
+				unpackOptional = true
 			}
 		}
 
 		if member.Type.Kind == types.Struct {
 			varN = fmt.Sprintf("%s(%s)", modelTypeName(member.Type), varN)
 		}
+
+		if unpackOptional {
+			_, err = fmt.Fprintf(w, `
+    if %s.isUnpacked {`, unpackMemberVarName(member))
+			if err != nil {
+				return err
+			}
+		}
+
 		_, err = fmt.Fprintf(w, `
     obj.Spec.%s = %s`, member.Name, varN)
 		if err != nil {
 			return err
+		}
+
+		if unpackOptional {
+			_, err = fmt.Fprintf(w, `
+    }`)
+			if err != nil {
+				return err
+			}
 		}
 	}
 
@@ -323,12 +342,10 @@ func (p Plugin) %s(t *starlark.Thread, fn *starlark.Builtin, args starlark.Tuple
 	return nil
 }
 
-// Given a member list struct type, we need to 3 pieces:
+// Given a member list struct type, we need to 2 pieces:
 // 1) A starlark type so that this struct can be passed around.
 // 2) An Unpack() function so that this struct can be read from a list.
-// 3) A built-in function that constructs the object natively.
-// TODO(nick): add (3)
-func WriteStarlarkListUnpacker(t *types.Type, pkg *types.Package, w io.Writer) error {
+func WriteStarlarkStructListFunction(t *types.Type, pkg *types.Package, w io.Writer) error {
 
 	tName := t.Name.Name
 
@@ -386,6 +403,7 @@ func WriteStarlarkStructFunction(t *types.Type, pkg *types.Package, w io.Writer)
 type %s struct {
   *starlark.Dict
   Value %s
+  isUnpacked bool
   t *starlark.Thread // instantiation thread for computing abspath
 }
 `, tName, modelTypeName(t))
@@ -393,7 +411,100 @@ type %s struct {
 		return err
 	}
 
+	err = writeStarlarkStructConstructor(t, pkg, w)
+	if err != nil {
+		return err
+	}
+
 	return writeStarlarkStructUnpacker(t, pkg, w)
+}
+
+// For each struct in the API that's not a top-level type, create
+// a built-in function that returns the struct and lets you pass it around.
+func writeStarlarkStructConstructor(t *types.Type, pkg *types.Package, w io.Writer) error {
+	tName := t.Name.Name
+	fnName := strcase.ToLowerCamel(tName)
+
+	// Print the function signature.
+	_, err := fmt.Fprintf(w, `
+func (p Plugin) %s(t *starlark.Thread, fn *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {`,
+		fnName)
+	if err != nil {
+		return err
+	}
+
+	// Unpack each argument into a starlark.Value
+	for _, m := range t.Members {
+		_, err = fmt.Fprintf(w, `
+  var %s starlark.Value`, unpackMemberVarName(m))
+		if err != nil {
+			return err
+		}
+	}
+
+	_, err = fmt.Fprintf(w, `
+	err := starkit.UnpackArgs(t, fn.Name(), args, kwargs,`)
+	if err != nil {
+		return err
+	}
+
+	for _, member := range t.Members {
+		_, err = fmt.Fprintf(w, `
+    "%s?", &%s,`, strcase.ToSnake(member.Name), unpackMemberVarName(member))
+		if err != nil {
+			return err
+		}
+	}
+
+	// Print the end of arg parsing.
+	_, err = fmt.Fprintf(w, `
+  )
+  if err != nil {
+    return nil, err
+  }
+`)
+	if err != nil {
+		return err
+	}
+
+	// Create a dict from the args, then use dict-based unpacking.
+	_, err = fmt.Fprintf(w, `
+  dict := starlark.NewDict(%d)
+`, len(t.Members))
+	if err != nil {
+		return err
+	}
+
+	for _, member := range t.Members {
+		mName := unpackMemberVarName(member)
+		_, err = fmt.Fprintf(w, `
+  if %s != nil {
+    err := dict.SetKey(starlark.String("%s"), %s)
+    if err != nil {
+      return nil, err
+    }
+  }`, mName,
+			strcase.ToSnake(member.Name),
+			mName)
+		if err != nil {
+			return err
+		}
+	}
+
+	_, err = fmt.Fprintf(w, `
+  var obj *%s = &%s{t: t}
+  err = obj.Unpack(dict)
+  if err != nil {
+    return nil, err
+  }
+  return obj, nil
+}
+`, tName, tName)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func writeStarlarkStructUnpacker(t *types.Type, pkg *types.Package, w io.Writer) error {
@@ -411,6 +522,12 @@ func (o *%s) Unpack(v starlark.Value) error {`,
 	_, err = fmt.Fprintf(w, `
 	obj := %s{}
 
+  starlarkObj, ok := v.(*%s)
+  if ok {
+    *o = *starlarkObj
+    return nil
+  }
+
   mapObj, ok := v.(*starlark.Dict)
   if !ok {
     return fmt.Errorf("expected dict, actual: %%v", v.Type())
@@ -422,7 +539,7 @@ func (o *%s) Unpack(v starlark.Value) error {`,
     if !ok {
       return fmt.Errorf("key must be string. Got: %%s", keyV.Type())
     }
-`, modelTypeName(t))
+`, modelTypeName(t), tName)
 	if err != nil {
 		return err
 	}
@@ -442,6 +559,7 @@ func (o *%s) Unpack(v starlark.Value) error {`,
   mapObj.Freeze()
   o.Dict = mapObj
   o.Value = obj
+  o.isUnpacked = true
 
   return nil
 }`)
