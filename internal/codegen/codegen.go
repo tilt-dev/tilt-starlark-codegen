@@ -144,8 +144,22 @@ func unpackMemberVar(m types.Member) (memberVar, error) {
 		return memberVar{}, fmt.Errorf("parsing tags in %s: %v", m.Name, err)
 	}
 
+	mName := unpackMemberVarName(m)
 	t := m.Type
 	if t.Kind == types.Builtin {
+		if isLocalPath {
+			return memberVar{
+				Type: "value.LocalPath",
+				Name: mName,
+				Initial: fmt.Sprintf(`= value.NewLocalPathUnpacker(t)
+  err = %s.Unpack(starlark.String(""))
+  if err != nil {
+    return nil, err
+  }
+`, mName),
+			}, nil
+		}
+
 		return memberVar{Name: fmt.Sprintf("obj.Spec.%s", m.Name)}, nil
 	}
 
@@ -224,6 +238,7 @@ func (p Plugin) %s(t *starlark.Thread, fn *starlark.Builtin, args starlark.Tuple
 
 	// Print the object initializer.
 	_, err = fmt.Fprintf(w, `
+  var err error
 	obj := &%s{
 		ObjectMeta: metav1.ObjectMeta{},
 		Spec: %sSpec{},
@@ -254,7 +269,7 @@ func (p Plugin) %s(t *starlark.Thread, fn *starlark.Builtin, args starlark.Tuple
 	_, err = fmt.Fprintf(w, `
   var labels value.StringStringMap
 	var annotations value.StringStringMap
-	err := starkit.UnpackArgs(t, fn.Name(), args, kwargs,
+	err = starkit.UnpackArgs(t, fn.Name(), args, kwargs,
 		"name", &obj.ObjectMeta.Name,
 		"labels?", &labels,
 		"annotations?", &annotations,`)
