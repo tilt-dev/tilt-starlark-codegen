@@ -87,7 +87,7 @@ tilt-starlark-codegen ./pkg/apis/core/v1alpha1 -
 	// gofmt
 	result, err := imports.Process("", buf.Bytes(), nil)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Problem formatting output: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Problem gofmting output: %v\n", err)
 
 		// If we have a formatting error, we should still treat
 		// this as success and write to the file anyway.
@@ -97,7 +97,7 @@ tilt-starlark-codegen ./pkg/apis/core/v1alpha1 -
 		result = buf.Bytes()
 	}
 
-	out, err := codegen.OpenOutputFile(args[2])
+	out, outName, err := codegen.OpenOutputFile(args[2])
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
@@ -108,6 +108,8 @@ tilt-starlark-codegen ./pkg/apis/core/v1alpha1 -
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
+
+	fmt.Fprintf(os.Stderr, "Wrote output to %s\n", outName)
 
 	closer, ok := out.(io.Closer)
 	if ok {

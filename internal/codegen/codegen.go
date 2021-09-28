@@ -16,16 +16,12 @@ import (
 // Find all top-level types with the tilt:starlark-gen=true tag.
 func LoadStarlarkGenTypes(pkg string) (*types.Package, []*types.Type, error) {
 	b := parser.New()
-	err := b.AddDir(pkg)
-	if err != nil {
-		return nil, nil, err
-	}
-	universe, err := b.FindTypes()
+	u := types.Universe{}
+	pkgSpec, err := b.AddDirectoryTo(pkg, &u)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	pkgSpec := universe.Package(pkg)
 	results := []*types.Type{}
 	for _, t := range pkgSpec.Types {
 		ok, err := types.ExtractSingleBoolCommentTag("+", "tilt:starlark-gen", false, t.CommentLines)
@@ -53,18 +49,18 @@ func getSpecMemberType(t *types.Type) *types.Type {
 }
 
 // Opens the output file.
-func OpenOutputFile(outDir string) (io.Writer, error) {
-	out := os.Stdout
-	if outDir != "-" {
-		outPath := filepath.Join(outDir, "types.go")
-
-		var err error
-		out, err = os.OpenFile(outPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0555)
-		if err != nil {
-			return nil, err
-		}
+func OpenOutputFile(outDir string) (w io.Writer, path string, err error) {
+	if outDir == "-" {
+		return os.Stdout, "stdout", nil
 	}
-	return out, nil
+
+	outPath := filepath.Join(outDir, "types.go")
+
+	out, err := os.OpenFile(outPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0555)
+	if err != nil {
+		return nil, outPath, err
+	}
+	return out, outPath, nil
 }
 
 // Writes the package header.
