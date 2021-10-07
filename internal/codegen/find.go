@@ -1,7 +1,6 @@
 package codegen
 
 import (
-	"fmt"
 	"sort"
 
 	"k8s.io/gengo/types"
@@ -13,7 +12,7 @@ func FindStructMembers(topLevelTypes []*types.Type) ([]*types.Type, error) {
 	for _, t := range topLevelTypes {
 		spec := getSpecMemberType(t)
 		if spec == nil {
-			return nil, fmt.Errorf("type has no spec: %s", t.Name.Name)
+			continue
 		}
 		findStructMembersHelper(spec, resultMap)
 	}
