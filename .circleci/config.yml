@@ -24,4 +24,4 @@ jobs:
       - run:
           name: Run tests
           command: |
-            make install check
+            make install check test
