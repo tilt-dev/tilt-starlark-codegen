@@ -17,6 +17,10 @@ import (
 func (p Plugin) registerSymbols(env *starkit.Environment) error {
 	var err error
 
+	err = env.AddBuiltin("example.config_map", p.configMap)
+	if err != nil {
+		return err
+	}
 	err = env.AddBuiltin("example.file_watch", p.fileWatch)
 	if err != nil {
 		return err
@@ -27,6 +31,30 @@ func (p Plugin) registerSymbols(env *starkit.Environment) error {
 	}
 	return nil
 }
+func (p Plugin) configMap(t *starlark.Thread, fn *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var err error
+	obj := &example.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{},
+	}
+	var data value.StringStringMap
+	var labels value.StringStringMap
+	var annotations value.StringStringMap
+	err = starkit.UnpackArgs(t, fn.Name(), args, kwargs,
+		"name", &obj.ObjectMeta.Name,
+		"labels?", &labels,
+		"annotations?", &annotations,
+		"data?", &data,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	obj.Data = data
+	obj.ObjectMeta.Labels = labels
+	obj.ObjectMeta.Annotations = annotations
+	return p.register(t, obj)
+}
+
 func (p Plugin) fileWatch(t *starlark.Thread, fn *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	var err error
 	obj := &example.FileWatch{

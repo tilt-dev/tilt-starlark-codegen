@@ -48,6 +48,16 @@ func getSpecMemberType(t *types.Type) *types.Type {
 	return nil
 }
 
+// Special-case config map, which only has one member: Data
+func getDataMember(t *types.Type) *types.Member {
+	for _, member := range t.Members {
+		if member.Name == "Data" {
+			return &member
+		}
+	}
+	return nil
+}
+
 // Opens the output file.
 func OpenOutputFile(outDir string) (w io.Writer, path string, err error) {
 	if outDir == "-" {
@@ -177,6 +187,13 @@ func unpackMemberVar(m types.Member) (memberVar, error) {
 		}
 	}
 
+	if t.Kind == types.Map {
+		return memberVar{
+			Type: "value.StringStringMap",
+			Name: unpackMemberVarName(m),
+		}, nil
+	}
+
 	if t.Kind == types.Slice {
 		if t.Elem.Kind == types.Builtin && t.Elem.Name.Name == "string" {
 			if isLocalPath {
@@ -218,8 +235,14 @@ func WriteStarlarkAPIObjectFunction(t *types.Type, pkg *types.Package, w io.Writ
 	tName := t.Name.Name
 	fnName := strcase.ToLowerCamel(tName)
 	spec := getSpecMemberType(t)
-	if spec == nil {
-		return fmt.Errorf("type has no spec: %s", tName)
+	data := getDataMember(t)
+	var members []types.Member
+	if spec != nil {
+		members = spec.Members
+	} else if data != nil {
+		members = []types.Member{*data}
+	} else {
+		return fmt.Errorf("type has no spec or data field: %s", tName)
 	}
 
 	objTypeName := modelTypeName(t)
@@ -233,18 +256,22 @@ func (p Plugin) %s(t *starlark.Thread, fn *starlark.Builtin, args starlark.Tuple
 	}
 
 	// Print the object initializer.
+	specInit := ""
+	if spec != nil {
+		specInit = fmt.Sprintf(`
+    Spec: %sSpec{},`, objTypeName)
+	}
 	_, err = fmt.Fprintf(w, `
   var err error
 	obj := &%s{
-		ObjectMeta: metav1.ObjectMeta{},
-		Spec: %sSpec{},
-	}`, objTypeName, objTypeName)
+		ObjectMeta: metav1.ObjectMeta{},%s
+	}`, objTypeName, specInit)
 	if err != nil {
 		return err
 	}
 
 	// Print any special unpack vars.
-	for _, member := range spec.Members {
+	for _, member := range members {
 		memberVar, err := unpackMemberVar(member)
 		if err != nil {
 			return fmt.Errorf("generating type %s: %v", tName, err)
@@ -274,7 +301,7 @@ func (p Plugin) %s(t *starlark.Thread, fn *starlark.Builtin, args starlark.Tuple
 	}
 
 	// Print unpackers of individual members.
-	for _, member := range spec.Members {
+	for _, member := range members {
 		memberVar, _ := unpackMemberVar(member)
 		_, err = fmt.Fprintf(w, `
     "%s?", &%s,`, strcase.ToSnake(member.Name), memberVar.Name)
@@ -295,7 +322,7 @@ func (p Plugin) %s(t *starlark.Thread, fn *starlark.Builtin, args starlark.Tuple
 	}
 
 	// Copy unpackers into the object.
-	for _, member := range spec.Members {
+	for _, member := range members {
 		memberVar, _ := unpackMemberVar(member)
 		unpackOptional := false
 		if memberVar.Type == "" {
@@ -325,10 +352,18 @@ func (p Plugin) %s(t *starlark.Thread, fn *starlark.Builtin, args starlark.Tuple
 			}
 		}
 
-		_, err = fmt.Fprintf(w, `
+		if spec != nil {
+			_, err = fmt.Fprintf(w, `
     obj.Spec.%s = %s`, member.Name, varN)
-		if err != nil {
-			return err
+			if err != nil {
+				return err
+			}
+		} else {
+			_, err = fmt.Fprintf(w, `
+    obj.%s = %s`, member.Name, varN)
+			if err != nil {
+				return err
+			}
 		}
 
 		if unpackOptional {
