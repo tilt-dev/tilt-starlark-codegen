@@ -149,9 +149,11 @@ func unpackMemberVar(m types.Member) (memberVar, error) {
 	if err != nil {
 		return memberVar{}, fmt.Errorf("parsing tags in %s: %v", m.Name, err)
 	}
+	isDuration := isDurationMember(m)
 
 	mName := unpackMemberVarName(m)
 	t := m.Type
+
 	if t.Kind == types.Builtin {
 		if isLocalPath {
 			return memberVar{
@@ -169,7 +171,20 @@ func unpackMemberVar(m types.Member) (memberVar, error) {
 		return memberVar{Name: fmt.Sprintf("obj.Spec.%s", m.Name)}, nil
 	}
 
+	if t.Kind == types.Alias && t.Underlying.Kind == types.Builtin {
+		return memberVar{
+			Type: t.Underlying.Name.Name,
+			Name: mName,
+		}, nil
+	}
+
 	if t.Kind == types.Struct {
+		if isDuration {
+			return memberVar{
+				Type: "value.Duration",
+				Name: unpackMemberVarName(m),
+			}, nil
+		}
 		return memberVar{
 			Type:    t.Name.Name,
 			Name:    unpackMemberVarName(m),
@@ -340,8 +355,13 @@ func (p Plugin) %s(t *starlark.Thread, fn *starlark.Builtin, args starlark.Tuple
 			}
 		}
 
-		if member.Type.Kind == types.Struct {
-			varN = fmt.Sprintf("%s(%s)", modelTypeName(member.Type), varN)
+		if member.Type.Kind == types.Struct || member.Type.Kind == types.Alias {
+			isDuration := isDurationMember(member)
+			if isDuration {
+				varN = fmt.Sprintf("metav1.Duration{Duration: time.Duration(%s)}", varN)
+			} else {
+				varN = fmt.Sprintf("%s(%s)", modelTypeName(member.Type), varN)
+			}
 		}
 
 		if unpackOptional {
@@ -631,6 +651,22 @@ func isTimeMember(m types.Member) bool {
 	return false
 }
 
+func isDurationMember(m types.Member) bool {
+	if m.Type.Kind == types.Pointer && m.Type.Elem.Kind == types.Struct {
+		elName := m.Type.Elem.Name.Name
+		if elName == "Duration" {
+			return true
+		}
+	}
+	if m.Type.Kind == types.Struct {
+		tName := m.Type.Name.Name
+		if tName == "Duration" {
+			return true
+		}
+	}
+	return false
+}
+
 // Recursive helper function for unpacking individual members
 // of a struct.
 func writeAttrUnpacker(m types.Member, pkg *types.Package, w io.Writer) error {
@@ -659,6 +695,8 @@ func writeAttrUnpacker(m types.Member, pkg *types.Package, w io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("parsing tags in %s: %v", m.Name, err)
 	}
+
+	isDuration := isDurationMember(m)
 
 	if m.Type.Kind == types.Builtin ||
 		(m.Type.Kind == types.Alias && m.Type.Underlying.Kind == types.Builtin) ||
@@ -765,7 +803,20 @@ func writeAttrUnpacker(m types.Member, pkg *types.Package, w io.Writer) error {
 			return err
 		}
 	} else if m.Type.Kind == types.Struct {
-		_, err = fmt.Fprintf(w, `
+		if isDuration {
+			_, err = fmt.Fprintf(w, `
+      v := value.Duration{}
+      err := v.Unpack(val)
+      if err != nil {
+        return fmt.Errorf("unpacking %%s: %%v", key, err)
+      }
+      obj.%s = metav1.Duration{Duration: time.Duration(v)}
+      continue`, m.Name)
+			if err != nil {
+				return err
+			}
+		} else {
+			_, err = fmt.Fprintf(w, `
       v := %s{t: o.t}
       err := v.Unpack(val)
       if err != nil {
@@ -773,8 +824,9 @@ func writeAttrUnpacker(m types.Member, pkg *types.Package, w io.Writer) error {
       }
       obj.%s = v.Value
       continue`, m.Type.Name.Name, m.Name)
-		if err != nil {
-			return err
+			if err != nil {
+				return err
+			}
 		}
 	} else if m.Type.Kind == types.Pointer && m.Type.Elem.Kind == types.Struct {
 		_, err = fmt.Fprintf(w, `

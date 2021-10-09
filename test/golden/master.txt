@@ -2,6 +2,7 @@ package example
 
 import (
 	"fmt"
+	"time"
 
 	"go.starlark.net/starlark"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -63,6 +64,8 @@ func (p Plugin) fileWatch(t *starlark.Thread, fn *starlark.Builtin, args starlar
 	}
 	var watchedPaths value.LocalPathList = value.NewLocalPathListUnpacker(t)
 	var ignores IgnoreDefList = IgnoreDefList{t: t}
+	var strategy string
+	var debounce value.Duration
 	var labels value.StringStringMap
 	var annotations value.StringStringMap
 	err = starkit.UnpackArgs(t, fn.Name(), args, kwargs,
@@ -71,6 +74,8 @@ func (p Plugin) fileWatch(t *starlark.Thread, fn *starlark.Builtin, args starlar
 		"annotations?", &annotations,
 		"watched_paths?", &watchedPaths,
 		"ignores?", &ignores,
+		"strategy?", &strategy,
+		"debounce?", &debounce,
 	)
 	if err != nil {
 		return nil, err
@@ -78,6 +83,8 @@ func (p Plugin) fileWatch(t *starlark.Thread, fn *starlark.Builtin, args starlar
 
 	obj.Spec.WatchedPaths = watchedPaths.Value
 	obj.Spec.Ignores = ignores.Value
+	obj.Spec.Strategy = example.FileWatchStrategy(strategy)
+	obj.Spec.Debounce = metav1.Duration{Duration: time.Duration(debounce)}
 	obj.ObjectMeta.Labels = labels
 	obj.ObjectMeta.Annotations = annotations
 	return p.register(t, obj)
