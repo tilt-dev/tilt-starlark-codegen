@@ -40,7 +40,7 @@ func findStructMembersHelper(t *types.Type, result map[string]*types.Type) {
 	}
 
 	for _, m := range t.Members {
-		if isTimeMember(m) {
+		if isTimeMember(m) || isDurationMember(m) {
 			continue
 		}
 

@@ -57,6 +57,12 @@ type FileWatchSpec struct {
 
 	// Ignores are optional rules to filter out a subset of changes matched by WatchedPaths.
 	Ignores []IgnoreDef `json:"ignores,omitempty" protobuf:"bytes,2,rep,name=ignores"`
+
+	// Strategy for testing named strings.
+	Strategy FileWatchStrategy `json:"strategy,omitempty" protobuf:"bytes,3,opt,name=strategy"`
+
+	// Duration for testing metav1.Duration
+	Debounce metav1.Duration `json:"debounce,omitempty" protobuf:"bytes,4,opt,name=duration"`
 }
 
 type IgnoreDef struct {
@@ -142,3 +148,5 @@ type FileEvent struct {
 	// SeenFiles is a list of paths which changed (create, modify, or delete).
 	SeenFiles []string `json:"seenFiles" protobuf:"bytes,2,rep,name=seenFiles"`
 }
+
+type FileWatchStrategy string
